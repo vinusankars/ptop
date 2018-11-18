@@ -1,3 +1,31 @@
+
+Skip to content
+
+    Pull requests
+    Issues
+    Marketplace
+    Explore
+
+    @vinusankars
+
+0
+0
+
+    17
+
+smeet20/ptop forked from darxtrix/ptop
+Code
+Pull requests 0
+Projects 0
+Wiki
+Insights
+ptop/ptop/interfaces/GUI.py
+6f0280e 6 days ago
+@smeet20 smeet20 GUI with Network Plot
+@darxtrix
+@smeet20
+@livibetter
+674 lines (578 sloc) 32 KB
 '''
     Graphical User Interface for ptop
 '''
@@ -6,6 +34,7 @@ import npyscreen, math, drawille
 import psutil, logging, weakref
 from ptop.utils import ThreadJob
 from ptop.constants import SYSTEM_USERS, SUPPORTED_THEMES
+import lehar
 
 
 # global flags defining actions, would like them to be object vars
@@ -20,7 +49,6 @@ class ProcessDetailsInfoBox(npyscreen.Popup):
     This widget is used to who the detailed information about the selected process 
     in the processes table. Curretly only the port information is shown for a selected
     process.
-
     Set them to fix the position
     SHOW_ATX  = 10
     SHOW_ATY  = 2
@@ -184,8 +212,7 @@ class CustomMultiLineAction(npyscreen.MultiLineAction):
         self.process_details_view_helper.display()
         self.process_details_view_helper.edit()
 
-    #_kill_process takes *args, **kwargs
-    def _kill_process(self,*args,**kwargs):
+    def _kill_process(self):
         # Get the PID of the selected process
         pid_to_kill = self._get_selected_process_pid()
         self._logger.info("Terminating process with pid {0}".format(pid_to_kill))
@@ -275,6 +302,7 @@ class PtopGUI(npyscreen.NPSApp):
         self.basic_stats = None
         self.memory_chart = None
         self.cpu_chart = None
+        self.network_chart = None
         self.processes_table = None
 
         # Actions bar
@@ -292,6 +320,7 @@ class PtopGUI(npyscreen.NPSApp):
         self.CHART_WIDTH = None
         self.cpu_array = None
         self.memory_array = None
+        self.network_array = None
 
         # logger
         self._logger = logging.getLogger(__name__)
@@ -312,8 +341,10 @@ class PtopGUI(npyscreen.NPSApp):
         '''
         if chart_type == 'cpu':
             chart_array = self.cpu_array
-        else:
+        elif chart_type == 'memory':
             chart_array = self.memory_array
+        else:
+            chart_array = self.network_array
         
         for i in range(self.CHART_WIDTH):
             if i >= 2:
@@ -373,31 +404,43 @@ class PtopGUI(npyscreen.NPSApp):
             processes_info = self.statistics['Process']['text']
             system_info = self.statistics['System']['text']
             cpu_info = self.statistics['CPU']['graph']
+            network_info = self.statistics['Network']['text']
 
             #### Overview information ####
-
-            row1 = "Disk Usage (/) {4}{0: <6}/{1: >6} MB{4}{2: >2} %{5}Processes{4}{3: <8}".format(disk_info["used"],
+            row1 = "Disk Usage (/) {4}{0: <7}/{1: >7} MB{4}{2: >2} %{5}Processes{4}{3: <8}".format(disk_info["used"],
                                                                                                    disk_info["total"],
                                                                                                    disk_info["percentage"],
                                                                                                    processes_info["running_processes"],
                                                                                                    " "*int(4*self.X_SCALING_FACTOR),
                                                                                                    " "*int(9*self.X_SCALING_FACTOR))
 
-            row2 = "Swap Memory    {4}{0: <6}/{1: >6} MB{4}{2: >2} %{5}Threads  {4}{3: <8}".format(swap_info["active"],
+            row2 = "Swap Memory    {4}{0: <7}/{1: >7} MB{4}{2: >2} %{5}Threads  {4}{3: <8}".format(swap_info["active"],
                                                                                                    swap_info["total"],
                                                                                                    swap_info["percentage"],
                                                                                                    processes_info["running_threads"],
                                                                                                    " "*int(4*self.X_SCALING_FACTOR),
                                                                                                    " "*int(9*self.X_SCALING_FACTOR))
-
-            row3 = "Main Memory    {4}{0: <6}/{1: >6} MB{4}{2: >2} %{5}Boot Time{4}{3: <8}".format(memory_info["active"],
+          
+            row3 = "Main Memory    {4}{0: <7}/{1: >7} MB{4}{2: >2} %{5}Boot Time{4}{3: <8}".format(memory_info["active"],
                                                                                                    memory_info["total"],
                                                                                                    memory_info["percentage"],
-                                                                                                   system_info['running_time'],
+                                                                                                   timeStr,
+                                                                                                   " "*int(4*self.X_SCALING_FACTOR),
+                                                                                                   " "*int(9*self.X_SCALING_FACTOR))
+            net = psutil.net_io_counters()
+            sentt = net[0]*0.000001
+            sentt = str(round(sentt,2))
+            recc = net[1]*0.000001
+            recc = str(round(recc,2))
+            row4 = "Network Usage:\nSent/Received  {4}{0: <7}/{1: >7} MB{4}{2: >2} {5} {4}{3: <8}".format(sentt,
+                                                                                                   recc,
+                                                                                                   '',
+                                                                                                   '',
                                                                                                    " "*int(4*self.X_SCALING_FACTOR),
                                                                                                    " "*int(9*self.X_SCALING_FACTOR))
 
-            self.basic_stats.value = row1 + '\n' + row2 + '\n' + row3
+            self.basic_stats.value = row1 + '\n' + row2 + '\n' + row3 + '\n' + row4
+
             # Lazy update to GUI
             self.basic_stats.update(clear=True)
 
@@ -415,6 +458,19 @@ class PtopGUI(npyscreen.NPSApp):
             next_peak_height = int(math.ceil((float(memory_info['percentage'])/100)*self.CHART_HEIGHT))
             self.memory_chart.value = self.draw_chart(memory_canvas,next_peak_height,'memory')
             self.memory_chart.update(clear=True)
+
+            #### Network Usage information ####
+
+            network_canvas = drawille.Canvas()
+            next_peak_height = int(math.ceil((float(network_info['received'])/100)*self.CHART_HEIGHT))
+
+            if next_peak_height > 100:
+                next_peak_height = 100
+            #print(self.cpu_array[100:126])
+
+            self.network_chart.value = self.draw_chart(network_canvas,next_peak_height,'network') #lehar.draw(self.cpu_array[100:126])
+            self.network_chart.update(clear=True)
+
 
             #### Processes table ####
 
@@ -513,7 +569,7 @@ class PtopGUI(npyscreen.NPSApp):
         MEMORY_USAGE_WIDGET_REL_X = LEFT_OFFSET
         MEMORY_USAGE_WIDGET_REL_Y = OVERVIEW_WIDGET_REL_Y + OVERVIEW_WIDGET_HEIGHT
         MEMORY_USAGE_WIDGET_HEIGHT = int(10*self.Y_SCALING_FACTOR)
-        MEMORY_USAGE_WIDGET_WIDTH = int(50*self.X_SCALING_FACTOR)
+        MEMORY_USAGE_WIDGET_WIDTH = int(33.3*self.X_SCALING_FACTOR)
         self._logger.info("Trying to draw Memory Usage information box, x1 {0} x2 {1} y1 {2} y2 {3}".format(MEMORY_USAGE_WIDGET_REL_X,
                                                                                                    MEMORY_USAGE_WIDGET_REL_X+MEMORY_USAGE_WIDGET_WIDTH,
                                                                                                    MEMORY_USAGE_WIDGET_REL_Y,
@@ -550,6 +606,27 @@ class PtopGUI(npyscreen.NPSApp):
                                          )
         self.cpu_chart.value = "" 
         self.cpu_chart.entry_widget.editable = False
+
+        ######    NETWORK Usage widget  #########
+
+        NETWORK_USAGE_WIDGET_REL_X = CPU_USAGE_WIDGET_REL_X + CPU_USAGE_WIDGET_WIDTH
+        NETWORK_USAGE_WIDGET_REL_Y = CPU_USAGE_WIDGET_REL_Y
+        NETWORK_USAGE_WIDGET_HEIGHT = CPU_USAGE_WIDGET_HEIGHT
+        NETWORK_USAGE_WIDGET_WIDTH = CPU_USAGE_WIDGET_WIDTH
+        self._logger.info("Trying to draw Network Usage information box, x1 {0} x2 {1} y1 {2} y2 {3}".format(NETWORK_USAGE_WIDGET_REL_X,
+                                                                                                NETWORK_USAGE_WIDGET_REL_X+NETWORK_USAGE_WIDGET_WIDTH,
+                                                                                                NETWORK_USAGE_WIDGET_REL_Y,
+                                                                                                NETWORK_USAGE_WIDGET_REL_Y+NETWORK_USAGE_WIDGET_HEIGHT)
+                                                                                                )
+        self.network_chart = self.window.add(MultiLineWidget,
+                                         name="Network Usage",
+                                         relx=NETWORK_USAGE_WIDGET_REL_X,
+                                         rely=NETWORK_USAGE_WIDGET_REL_Y,
+                                         max_height=NETWORK_USAGE_WIDGET_HEIGHT,
+                                         max_width=NETWORK_USAGE_WIDGET_WIDTH
+                                         )
+        self.network_chart.value = "" 
+        self.network_chart.entry_widget.editable = False
 
 
         ######    Processes Info widget  #########
@@ -597,7 +674,6 @@ class PtopGUI(npyscreen.NPSApp):
             scaling factors now the dimensions of the CPU_WIDGETS/MEMORY _WIDGETS are used for calculation
             of the dimensions of the charts. There is padding of width 1 between the boundaries of the widgets 
             and the charts
-
             # self.CHART_WIDTH = int(self.CHART_WIDTH*self.X_SCALING_FACTOR)
             # self.CHART_HEIGHT = int(self.CHART_HEIGHT*self.Y_SCALING_FACTOR)
         '''
@@ -610,6 +686,8 @@ class PtopGUI(npyscreen.NPSApp):
         # fix for index error
         self.cpu_array = [0]*self.CHART_WIDTH
         self.memory_array = [0]*self.CHART_WIDTH
+        self.network_array = [0]*self.CHART_WIDTH
+
 
         # add subwidgets to the parent widget
         self.window.edit()
@@ -620,3 +698,19 @@ class PtopGUI(npyscreen.NPSApp):
         # time(ms) to wait for user interactions
         self.keypress_timeout_default = 10
         self.draw()
+
+    © 2018 GitHub, Inc.
+    Terms
+    Privacy
+    Security
+    Status
+    Help
+
+    Contact GitHub
+    Pricing
+    API
+    Training
+    Blog
+    About
+
+Press h to open a hovercard with more details.
